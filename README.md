@@ -58,16 +58,16 @@ A star schema — two fact tables sharing conformed dimensions:
 └────────────────┘
 ```
 
-**6 tables · 16 measures · 4 report pages**
+**6 tables · 17 measures · 4 report pages**
 
 Every relationship is many-to-one with single-direction cross-filtering. Filters flow from
 the dimensions down into the facts and nowhere else — no bidirectional filtering, which
-keeps the filter propagation predictable and the model debuggable.
+keeps filter propagation predictable and the model debuggable.
 
-`DateTable` is a dedicated calendar marked as the model's date table, so both
-`Sales Transactions[Date]` and `Budget[Month]` are filtered from a single source of truth.
-Budget sits at monthly grain while sales sit at daily grain, which is worth knowing when
-reading a part-month: budget attributes to the first of the month.
+A dedicated `DateTable` filters both fact tables, so `Sales Transactions[Date]` and
+`Budget[Month]` answer to a single date selection rather than two independent ones. Budget
+sits at monthly grain while sales sit at daily grain, which is worth knowing when reading
+a part-month: budget attributes to the first of the month.
 
 ### Tables
 
@@ -116,15 +116,28 @@ COUNTROWS(
     FILTER('Sales Transactions', 'Sales Transactions'[Flag] = "BELOW_COST")
 )
 
-Avg Discount % =
-AVERAGEX(
-    FILTER('Sales Transactions', 'Sales Transactions'[Discount %] > 0),
-    'Sales Transactions'[Discount %]
+-- The margin threshold comes from the product dimension, not a hard-coded number,
+-- so each product is tested against its own commercial target.
+Low Margin Transactions =
+COUNTROWS (
+    FILTER (
+        'Sales Transactions',
+        'Sales Transactions'[Gross Margin %]
+            < RELATED ( 'Product Master'[Target Margin %] )
+    )
 )
+
+Margin vs Target =
+[GM %] - SELECTEDVALUE ( 'Product Master'[Target Margin %] )
 ```
 
 `DIVIDE` throughout rather than `/`, so a filter selection that empties the denominator
 returns a clean zero instead of an error spreading across the visual.
+
+`Low Margin Transactions` reads each product's own `Target Margin %` via `RELATED` rather
+than testing everything against one fixed percentage. A 45% margin is healthy on apparel
+and poor on beauty, so a single global threshold would flag the wrong products in both
+directions.
 
 ## Design decisions
 
@@ -159,15 +172,17 @@ The queries currently point at a local path. After cloning, open
   logic are the substance.
 - **Four months of history** — not enough for seasonality, year-on-year comparison, or
   any meaningful trend work.
-- **`Low Margin Transactions` uses a fixed 30% threshold**, while `Product Master` carries
-  a per-product `Target Margin %` that the measure does not yet read. Driving the
-  threshold from the dimension is the correct approach and is the next change.
+- **`DateTable` is defined over a hard-coded range** — `CALENDAR(DATE(2026,1,1),
+  DATE(2026,4,30))` — and is not yet marked as the model's date table. It filters both
+  facts correctly, but the range won't extend as data arrives, and DAX time-intelligence
+  functions want a table that is explicitly marked.
 - **Row-level security is not implemented.** A real deployment would restrict store
   managers to their own store.
 
 ## Next
 
-- Point the low-margin test at `Product Master[Target Margin %]` rather than a fixed 30%
+- Derive the `DateTable` range from the fact table rather than hard-coding it, and mark it
+  as the model's date table
 - Parameterise the source path in Power Query so the file refreshes on any machine
 - Row-level security by store and region
 - Time intelligence — prior period, year-to-date, rolling averages — once there is enough
